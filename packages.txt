@@ -1,0 +1,4 @@
+tesseract-ocr
+tesseract-ocr-kor
+fonts-nanum
+libgl1-mesa-glx
