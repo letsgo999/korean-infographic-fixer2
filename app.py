@@ -121,13 +121,10 @@ def recalculate():
             st.session_state.coord_y2 = y1 + h
 
 def reset_coords():
-    """좌표 입력 완전 초기화"""
-    st.session_state.coord_x1 = 0
-    st.session_state.coord_y1 = 0
-    st.session_state.coord_x2 = 0
-    st.session_state.coord_y2 = 0
-    st.session_state.coord_w = 0
-    st.session_state.coord_h = 0
+    """좌표 입력 완전 초기화 - 위젯 연결된 키는 del로 삭제"""
+    for k in ['coord_x1', 'coord_y1', 'coord_x2', 'coord_y2', 'coord_w', 'coord_h']:
+        if k in st.session_state:
+            del st.session_state[k]
     st.session_state.confirmed_start = False
     st.session_state.confirmed_end = False
     st.session_state.confirmed_size = False
