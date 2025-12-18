@@ -1,6 +1,6 @@
 """
 Korean Infographic Fixer - Streamlit Main App
-v2.5 - 스마트 자동 계산 (수정)
+v2.6 - 스마트 자동 계산 (입력 확정 추적)
 """
 import streamlit as st
 import cv2
@@ -37,8 +37,9 @@ def init_session_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
-def init_coord_state(w_img, h_img):
-    """좌표 상태 초기화 (이미지 로드 후)"""
+def init_coord_state():
+    """좌표 상태 초기화"""
+    # 좌표값
     if 'coord_x1' not in st.session_state:
         st.session_state.coord_x1 = 0
     if 'coord_y1' not in st.session_state:
@@ -51,53 +52,35 @@ def init_coord_state(w_img, h_img):
         st.session_state.coord_w = 0
     if 'coord_h' not in st.session_state:
         st.session_state.coord_h = 0
-    if 'last_changed' not in st.session_state:
-        st.session_state.last_changed = None
+    
+    # ★ 입력 확정 여부 (사용자가 직접 수정했는지)
+    if 'confirmed_start' not in st.session_state:
+        st.session_state.confirmed_start = False  # 시작점 확정 여부
+    if 'confirmed_end' not in st.session_state:
+        st.session_state.confirmed_end = False    # 끝점 확정 여부
+    if 'confirmed_size' not in st.session_state:
+        st.session_state.confirmed_size = False   # 크기 확정 여부
 
 # ==============================================================================
 # 자동 계산 콜백
 # ==============================================================================
 def on_start_change():
-    """시작점(X1, Y1) 변경 시"""
-    st.session_state.last_changed = 'start'
-    x1 = st.session_state.coord_x1
-    y1 = st.session_state.coord_y1
-    x2 = st.session_state.coord_x2
-    y2 = st.session_state.coord_y2
-    w = st.session_state.coord_w
-    h = st.session_state.coord_h
-    
-    # 끝점이 있으면 크기 계산
-    if x2 > x1 and y2 > y1:
-        st.session_state.coord_w = x2 - x1
-        st.session_state.coord_h = y2 - y1
-    # 크기가 있으면 끝점 계산
-    elif w > 0 and h > 0:
-        st.session_state.coord_x2 = x1 + w
-        st.session_state.coord_y2 = y1 + h
+    """시작점(X1, Y1) 변경 시 - 사용자가 직접 수정함"""
+    st.session_state.confirmed_start = True
+    recalculate()
 
 def on_end_change():
-    """끝점(X2, Y2) 변경 시"""
-    st.session_state.last_changed = 'end'
-    x1 = st.session_state.coord_x1
-    y1 = st.session_state.coord_y1
-    x2 = st.session_state.coord_x2
-    y2 = st.session_state.coord_y2
-    w = st.session_state.coord_w
-    h = st.session_state.coord_h
-    
-    # 시작점이 있으면 크기 계산
-    if x2 > x1 and y2 > y1:
-        st.session_state.coord_w = x2 - x1
-        st.session_state.coord_h = y2 - y1
-    # 크기가 있으면 시작점 계산
-    elif w > 0 and h > 0:
-        st.session_state.coord_x1 = max(0, x2 - w)
-        st.session_state.coord_y1 = max(0, y2 - h)
+    """끝점(X2, Y2) 변경 시 - 사용자가 직접 수정함"""
+    st.session_state.confirmed_end = True
+    recalculate()
 
 def on_size_change():
-    """크기(W, H) 변경 시"""
-    st.session_state.last_changed = 'size'
+    """크기(W, H) 변경 시 - 사용자가 직접 수정함"""
+    st.session_state.confirmed_size = True
+    recalculate()
+
+def recalculate():
+    """확정된 값들을 기준으로 나머지 자동 계산"""
     x1 = st.session_state.coord_x1
     y1 = st.session_state.coord_y1
     x2 = st.session_state.coord_x2
@@ -105,24 +88,49 @@ def on_size_change():
     w = st.session_state.coord_w
     h = st.session_state.coord_h
     
-    # 시작점이 있으면 끝점 계산
-    if x1 > 0 or y1 > 0:
-        st.session_state.coord_x2 = x1 + w
-        st.session_state.coord_y2 = y1 + h
-    # 끝점이 있으면 시작점 계산
-    elif x2 > 0 and y2 > 0:
-        st.session_state.coord_x1 = max(0, x2 - w)
-        st.session_state.coord_y1 = max(0, y2 - h)
+    confirmed_start = st.session_state.confirmed_start
+    confirmed_end = st.session_state.confirmed_end
+    confirmed_size = st.session_state.confirmed_size
+    
+    # Case 1: 시작점 + 끝점 확정 → 크기 계산
+    if confirmed_start and confirmed_end and not confirmed_size:
+        if x2 > x1 and y2 > y1:
+            st.session_state.coord_w = x2 - x1
+            st.session_state.coord_h = y2 - y1
+    
+    # Case 2: 시작점 + 크기 확정 → 끝점 계산
+    elif confirmed_start and confirmed_size and not confirmed_end:
+        if w > 0 and h > 0:
+            st.session_state.coord_x2 = x1 + w
+            st.session_state.coord_y2 = y1 + h
+    
+    # Case 3: 끝점 + 크기 확정 → 시작점 계산 ★ 핵심 케이스
+    elif confirmed_end and confirmed_size and not confirmed_start:
+        if w > 0 and h > 0 and x2 >= w and y2 >= h:
+            st.session_state.coord_x1 = x2 - w
+            st.session_state.coord_y1 = y2 - h
+    
+    # Case 4: 3개 모두 확정됨 - 마지막으로 변경된 것 기준으로 재계산
+    elif confirmed_start and confirmed_end and confirmed_size:
+        # 가장 최근 변경이 크기면 → 끝점 재계산
+        # 가장 최근 변경이 끝점이면 → 크기 재계산
+        # 가장 최근 변경이 시작점이면 → 크기 재계산
+        # 여기서는 일관성을 위해 크기 기준으로 끝점 재계산
+        if w > 0 and h > 0:
+            st.session_state.coord_x2 = x1 + w
+            st.session_state.coord_y2 = y1 + h
 
 def reset_coords():
-    """좌표 입력 초기화"""
+    """좌표 입력 완전 초기화"""
     st.session_state.coord_x1 = 0
     st.session_state.coord_y1 = 0
     st.session_state.coord_x2 = 0
     st.session_state.coord_y2 = 0
     st.session_state.coord_w = 0
     st.session_state.coord_h = 0
-    st.session_state.last_changed = None
+    st.session_state.confirmed_start = False
+    st.session_state.confirmed_end = False
+    st.session_state.confirmed_size = False
 
 # ==============================================================================
 # 유틸리티 함수
@@ -170,7 +178,8 @@ def render_step1_upload():
         st.session_state.pending_regions = []
         
         # 좌표 관련 세션 상태 삭제 (새 이미지 업로드 시 초기화)
-        for k in ['coord_x1', 'coord_y1', 'coord_x2', 'coord_y2', 'coord_w', 'coord_h', 'last_changed']:
+        for k in ['coord_x1', 'coord_y1', 'coord_x2', 'coord_y2', 'coord_w', 'coord_h',
+                  'confirmed_start', 'confirmed_end', 'confirmed_size']:
             if k in st.session_state:
                 del st.session_state[k]
         
@@ -202,7 +211,7 @@ def render_step2_detect():
     h_img, w_img = image.shape[:2]
     
     # 좌표 상태 초기화
-    init_coord_state(w_img, h_img)
+    init_coord_state()
     
     col_img, col_form = st.columns([2, 1])
     
@@ -217,14 +226,19 @@ def render_step2_detect():
         💡 **입력 방법** (아무 조합이나 가능!)
         - **시작점 + 끝점** → 크기 자동 계산
         - **시작점 + 크기** → 끝점 자동 계산  
-        - **끝점 + 크기** → 시작점 자동 계산
+        - **끝점 + 크기** → 시작점 자동 계산 ⭐
         """)
     
     with col_form:
         st.subheader("➕ 영역 추가")
         
+        # 확정 상태 표시
+        cs = "✅" if st.session_state.get('confirmed_start', False) else "⬜"
+        ce = "✅" if st.session_state.get('confirmed_end', False) else "⬜"
+        cz = "✅" if st.session_state.get('confirmed_size', False) else "⬜"
+        
         # ========== 좌측 상단 (시작점) ==========
-        st.markdown("🔹 **좌측 상단 (시작점)**")
+        st.markdown(f"🔹 **좌측 상단 (시작점)** {cs}")
         c1, c2 = st.columns(2)
         with c1:
             st.number_input("X1", min_value=0, max_value=w_img-1, step=1,
@@ -234,7 +248,7 @@ def render_step2_detect():
                            key="coord_y1", on_change=on_start_change)
         
         # ========== 우측 하단 (끝점) ==========
-        st.markdown("🔹 **우측 하단 (끝점)**")
+        st.markdown(f"🔹 **우측 하단 (끝점)** {ce}")
         c3, c4 = st.columns(2)
         with c3:
             st.number_input("X2", min_value=0, max_value=w_img, step=1,
@@ -244,7 +258,7 @@ def render_step2_detect():
                            key="coord_y2", on_change=on_end_change)
         
         # ========== 크기 (너비/높이) ==========
-        st.markdown("🔹 **크기 (너비/높이)**")
+        st.markdown(f"🔹 **크기 (너비/높이)** {cz}")
         c5, c6 = st.columns(2)
         with c5:
             st.number_input("너비 (W)", min_value=0, max_value=w_img, step=1,
@@ -501,7 +515,7 @@ def render_step4_export():
 def render_sidebar():
     with st.sidebar:
         st.title("🖼️ 한글 인포그래픽 교정")
-        st.caption("v2.5")
+        st.caption("v2.6")
         st.divider()
         
         steps = ["1.업로드", "2.영역선택", "3.편집", "4.내보내기"]
