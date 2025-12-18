@@ -1,6 +1,6 @@
 """
 Korean Infographic Fixer - Streamlit Main App
-v2.0 - 캔버스 드래그로 텍스트 영역 선택
+v2.1 - Streamlit 1.28.0 호환 버전
 """
 import streamlit as st
 import cv2
@@ -9,35 +9,9 @@ from PIL import Image
 import io
 import os
 import uuid
-import base64
 from datetime import datetime
 
-# ==============================================================================
-# [필수 호환성 패치] 
-# Streamlit 1.52+ 버전에서 삭제된 'image_to_url' 기능을 수동으로 복구합니다.
-# 주의: 이 코드는 반드시 'streamlit_drawable_canvas' 임포트보다 위에 있어야 합니다.
-# ==============================================================================
-import streamlit.elements.image
-
-def local_image_to_url(image, width=None, clamp=False, channels="RGB", output_format="JPEG", image_id=None):
-    """
-    Streamlit 내부 함수 image_to_url을 대체하여,
-    이미지를 Base64 URL로 변환해주는 함수입니다.
-    """
-    if output_format.upper() == "JPEG" and image.mode == "RGBA":
-        image = image.convert("RGB")
-        
-    with io.BytesIO() as buffer:
-        image.save(buffer, format=output_format)
-        encoded = base64.b64encode(buffer.getvalue()).decode()
-        
-    return f"data:image/{output_format.lower()};base64,{encoded}"
-
-if not hasattr(streamlit.elements.image, 'image_to_url'):
-    streamlit.elements.image.image_to_url = local_image_to_url
-# ==============================================================================
-
-# [중요] 패치가 완료된 후에 라이브러리를 임포트해야 합니다.
+# Canvas 라이브러리 (Streamlit 1.28.0에서는 패치 불필요)
 from streamlit_drawable_canvas import st_canvas
 
 # Modules
@@ -170,7 +144,7 @@ def render_step1_upload():
             st.image(
                 cv2.cvtColor(image, cv2.COLOR_BGR2RGB),
                 caption=f"업로드된 이미지: {uploaded_file.name}",
-                use_container_width=True
+                use_column_width=True
             )
         with col2:
             st.success("✅ 이미지 업로드 완료!")
@@ -180,7 +154,7 @@ def render_step1_upload():
             - 크기: {image.shape[1]} x {image.shape[0]} px
             """)
         
-        if st.button("🎯 텍스트 영역 선택하기 →", type="primary", use_container_width=True):
+        if st.button("🎯 텍스트 영역 선택하기 →", type="primary"):
             st.session_state.current_step = 2
             st.session_state.canvas_key = f"canvas_{uuid.uuid4().hex[:8]}"
             st.rerun()
@@ -291,7 +265,7 @@ def render_step2_detect():
                     h_real = int(obj["height"] * scale_factor)
                     st.text(f"영역 {i+1}: X={x_real}, Y={y_real}, W={w_real}, H={h_real}")
             
-            if st.button("📝 텍스트 추출 및 편집하기 →", type="primary", use_container_width=True):
+            if st.button("📝 텍스트 추출 및 편집하기 →", type="primary"):
                 with st.spinner("🔄 텍스트 추출 중..."):
                     regions = []
                     
@@ -434,7 +408,7 @@ def render_step3_edit():
                     )
                 
                 # 적용 버튼
-                if st.button("💾 저장", key=f"save_{region_id}", use_container_width=True):
+                if st.button("💾 저장", key=f"save_{region_id}"):
                     st.session_state.edited_texts[region_id] = edited_text
                     
                     # 영역 정보 업데이트
@@ -458,7 +432,7 @@ def render_step3_edit():
         st.image(
             cv2.cvtColor(visualized, cv2.COLOR_BGR2RGB),
             caption="🟢 일반 | 🟣 수정됨",
-            use_container_width=True
+            use_column_width=True
         )
         
         # 범례
@@ -473,12 +447,12 @@ def render_step3_edit():
     # 네비게이션
     col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 1])
     with col_nav1:
-        if st.button("← 영역 다시 선택", use_container_width=True):
+        if st.button("← 영역 다시 선택"):
             st.session_state.current_step = 2
             st.session_state.canvas_key = f"canvas_{uuid.uuid4().hex[:8]}"
             st.rerun()
     with col_nav3:
-        if st.button("📤 결과물 생성하기 →", type="primary", use_container_width=True):
+        if st.button("📤 결과물 생성하기 →", type="primary"):
             st.session_state.current_step = 4
             st.rerun()
 
@@ -538,11 +512,11 @@ def render_step4_export():
         
         with col1:
             st.subheader("원본")
-            st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), use_container_width=True)
+            st.image(cv2.cvtColor(image, cv2.COLOR_BGR2RGB), use_column_width=True)
         
         with col2:
             st.subheader("결과물")
-            st.image(cv2.cvtColor(final_image, cv2.COLOR_BGR2RGB), use_container_width=True)
+            st.image(cv2.cvtColor(final_image, cv2.COLOR_BGR2RGB), use_column_width=True)
         
         st.divider()
         
@@ -558,8 +532,7 @@ def render_step4_export():
                     "📥 PNG 다운로드",
                     data=buffer.tobytes(),
                     file_name=filename,
-                    mime="image/png",
-                    use_container_width=True
+                    mime="image/png"
                 )
         
         with col_dl2:
@@ -577,8 +550,7 @@ def render_step4_export():
                 "📥 메타데이터 (JSON)",
                 data=metadata_json,
                 file_name=f"metadata_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json",
-                use_container_width=True
+                mime="application/json"
             )
         
     except Exception as e:
@@ -591,11 +563,11 @@ def render_step4_export():
     # 네비게이션
     col_nav1, col_nav2 = st.columns(2)
     with col_nav1:
-        if st.button("← 텍스트 수정하기", use_container_width=True):
+        if st.button("← 텍스트 수정하기"):
             st.session_state.current_step = 3
             st.rerun()
     with col_nav2:
-        if st.button("🔄 처음부터 다시", use_container_width=True):
+        if st.button("🔄 처음부터 다시"):
             st.session_state.current_step = 1
             st.session_state.original_image = None
             st.session_state.text_regions = []
@@ -609,7 +581,7 @@ def render_sidebar():
     """사이드바 렌더링"""
     with st.sidebar:
         st.title("🖼️ 한글 인포그래픽 교정 도구")
-        st.caption("v2.0 - 캔버스 드래그 선택")
+        st.caption("v2.1 - Streamlit 1.28 호환")
         
         st.divider()
         
@@ -647,9 +619,6 @@ def render_sidebar():
             
             **폰트 추가:**
             `fonts/` 폴더에 .ttf 파일 추가
-            
-            **문의:**
-            GitHub Issues 활용
             """)
 
 # ==============================================================================
