@@ -1,6 +1,6 @@
 """
 Korean Infographic Fixer - Streamlit Main App
-v2.2 - 캔버스 없이 좌표 입력 방식 (호환성 최대화)
+v2.3 - 좌표 자동 계산 기능 추가
 """
 import streamlit as st
 import cv2
@@ -40,7 +40,14 @@ def init_session_state():
         'uploaded_filename': None,
         'text_regions': [],
         'edited_texts': {},
-        'pending_regions': [],  # 추가 대기 중인 영역들
+        'pending_regions': [],
+        # 좌표 입력 상태
+        'coord_x1': 0,
+        'coord_y1': 0,
+        'coord_x2': 0,
+        'coord_y2': 0,
+        'coord_w': 0,
+        'coord_h': 0,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -155,10 +162,10 @@ def render_step1_upload():
             st.rerun()
 
 # ==============================================================================
-# Step 2: 텍스트 영역 선택 (좌표 입력 방식)
+# Step 2: 텍스트 영역 선택 (좌표 입력 방식 - 개선)
 # ==============================================================================
 def render_step2_detect():
-    """Step 2: 좌표 입력으로 텍스트 영역 선택"""
+    """Step 2: 좌표 입력으로 텍스트 영역 선택 (자동 계산 지원)"""
     st.header("🎯 Step 2: 텍스트 영역 선택")
     
     if st.session_state.original_image is None:
@@ -193,53 +200,179 @@ def render_step2_detect():
         st.info("""
         💡 **좌표 확인 방법:**
         1. 이미지를 다운로드하거나 그림판에서 열기
-        2. 수정할 텍스트 영역의 좌측 상단 좌표(X, Y)와 크기(W, H) 확인
-        3. 우측 폼에 좌표 입력 후 "영역 추가" 클릭
+        2. 수정할 텍스트 영역의 **좌측상단**(X1, Y1)과 **우측하단**(X2, Y2) 좌표 확인
+        3. 우측 폼에 좌표 입력 → 너비/높이 자동 계산
         """)
     
     with col_form:
         st.subheader("➕ 영역 추가")
         
-        # 좌표 입력 폼
-        with st.form("add_region_form"):
-            st.markdown("**새 영역 좌표 입력:**")
-            
-            col_x, col_y = st.columns(2)
-            with col_x:
-                x = st.number_input("X (좌측)", min_value=0, max_value=w_orig-1, value=0, step=10)
-            with col_y:
-                y = st.number_input("Y (상단)", min_value=0, max_value=h_orig-1, value=0, step=10)
-            
-            col_w, col_h = st.columns(2)
-            with col_w:
-                w = st.number_input("너비 (W)", min_value=10, max_value=w_orig, value=200, step=10)
-            with col_h:
-                h = st.number_input("높이 (H)", min_value=10, max_value=h_orig, value=50, step=10)
-            
-            submitted = st.form_submit_button("➕ 영역 추가", use_container_width=True)
-            
-            if submitted:
-                # 경계 검사
-                x = max(0, min(x, w_orig - 10))
-                y = max(0, min(y, h_orig - 10))
-                w = min(w, w_orig - x)
-                h = min(h, h_orig - y)
-                
-                new_region = {'x': x, 'y': y, 'width': w, 'height': h}
+        st.markdown("**📐 좌표 입력** (자동 계산 지원)")
+        
+        # ========== 좌측 상단 좌표 ==========
+        st.markdown("🔹 **좌측 상단 (시작점)**")
+        col_x1, col_y1 = st.columns(2)
+        with col_x1:
+            x1 = st.number_input(
+                "X1 (좌측)", 
+                min_value=0, 
+                max_value=w_orig-1, 
+                value=st.session_state.coord_x1,
+                step=1,
+                key="input_x1"
+            )
+        with col_y1:
+            y1 = st.number_input(
+                "Y1 (상단)", 
+                min_value=0, 
+                max_value=h_orig-1, 
+                value=st.session_state.coord_y1,
+                step=1,
+                key="input_y1"
+            )
+        
+        # ========== 우측 하단 좌표 ==========
+        st.markdown("🔹 **우측 하단 (끝점)**")
+        col_x2, col_y2 = st.columns(2)
+        with col_x2:
+            x2 = st.number_input(
+                "X2 (우측)", 
+                min_value=0, 
+                max_value=w_orig, 
+                value=st.session_state.coord_x2,
+                step=1,
+                key="input_x2"
+            )
+        with col_y2:
+            y2 = st.number_input(
+                "Y2 (하단)", 
+                min_value=0, 
+                max_value=h_orig, 
+                value=st.session_state.coord_y2,
+                step=1,
+                key="input_y2"
+            )
+        
+        # ========== 너비 / 높이 ==========
+        st.markdown("🔹 **크기** (자동 계산)")
+        col_w, col_h = st.columns(2)
+        with col_w:
+            w = st.number_input(
+                "너비 (W)", 
+                min_value=0, 
+                max_value=w_orig, 
+                value=st.session_state.coord_w,
+                step=1,
+                key="input_w"
+            )
+        with col_h:
+            h = st.number_input(
+                "높이 (H)", 
+                min_value=0, 
+                max_value=h_orig, 
+                value=st.session_state.coord_h,
+                step=1,
+                key="input_h"
+            )
+        
+        # ========== 자동 계산 버튼들 ==========
+        st.markdown("---")
+        col_calc1, col_calc2 = st.columns(2)
+        
+        with col_calc1:
+            # X2, Y2로부터 W, H 계산
+            if st.button("📊 W, H 계산", help="X2-X1, Y2-Y1으로 너비/높이 계산", use_container_width=True):
+                if x2 > x1 and y2 > y1:
+                    st.session_state.coord_x1 = x1
+                    st.session_state.coord_y1 = y1
+                    st.session_state.coord_x2 = x2
+                    st.session_state.coord_y2 = y2
+                    st.session_state.coord_w = x2 - x1
+                    st.session_state.coord_h = y2 - y1
+                    st.rerun()
+                else:
+                    st.error("X2 > X1, Y2 > Y1 이어야 합니다")
+        
+        with col_calc2:
+            # W, H로부터 X2, Y2 계산
+            if st.button("📊 X2, Y2 계산", help="X1+W, Y1+H로 끝점 계산", use_container_width=True):
+                if w > 0 and h > 0:
+                    st.session_state.coord_x1 = x1
+                    st.session_state.coord_y1 = y1
+                    st.session_state.coord_w = w
+                    st.session_state.coord_h = h
+                    st.session_state.coord_x2 = x1 + w
+                    st.session_state.coord_y2 = y1 + h
+                    st.rerun()
+                else:
+                    st.error("너비와 높이가 0보다 커야 합니다")
+        
+        # ========== 영역 추가 조건 확인 ==========
+        # 조건: x1, y1이 유효하고, w, h가 10 이상
+        final_w = w if w > 0 else (x2 - x1 if x2 > x1 else 0)
+        final_h = h if h > 0 else (y2 - y1 if y2 > y1 else 0)
+        
+        is_valid = (
+            x1 >= 0 and 
+            y1 >= 0 and 
+            final_w >= 10 and 
+            final_h >= 10 and
+            x1 + final_w <= w_orig and
+            y1 + final_h <= h_orig
+        )
+        
+        st.markdown("---")
+        
+        # 현재 계산된 영역 미리보기
+        if final_w > 0 and final_h > 0:
+            st.caption(f"📐 영역: ({x1}, {y1}) → ({x1 + final_w}, {y1 + final_h}) | 크기: {final_w} x {final_h}")
+        
+        # ========== 영역 추가 버튼 ==========
+        if is_valid:
+            if st.button("➕ 영역 추가", type="primary", use_container_width=True):
+                new_region = {
+                    'x': x1, 
+                    'y': y1, 
+                    'width': final_w, 
+                    'height': final_h
+                }
                 st.session_state.pending_regions.append(new_region)
-                st.success(f"✅ 영역 추가됨: ({x}, {y}) - {w}x{h}")
+                
+                # 입력값 초기화
+                st.session_state.coord_x1 = 0
+                st.session_state.coord_y1 = 0
+                st.session_state.coord_x2 = 0
+                st.session_state.coord_y2 = 0
+                st.session_state.coord_w = 0
+                st.session_state.coord_h = 0
+                
+                st.success(f"✅ 영역 추가됨!")
                 st.rerun()
+        else:
+            st.button("➕ 영역 추가", disabled=True, use_container_width=True)
+            if final_w < 10 or final_h < 10:
+                st.caption("⚠️ 너비와 높이가 10px 이상이어야 합니다")
         
-        st.divider()
+        # 입력 초기화 버튼
+        if st.button("🔄 입력 초기화", use_container_width=True):
+            st.session_state.coord_x1 = 0
+            st.session_state.coord_y1 = 0
+            st.session_state.coord_x2 = 0
+            st.session_state.coord_y2 = 0
+            st.session_state.coord_w = 0
+            st.session_state.coord_h = 0
+            st.rerun()
         
-        # 대기 중인 영역 목록
+        st.markdown("---")
+        
+        # ========== 대기 중인 영역 목록 ==========
         if st.session_state.pending_regions:
             st.markdown(f"**🔴 추가 대기 영역: {len(st.session_state.pending_regions)}개**")
             
             for i, region in enumerate(st.session_state.pending_regions):
                 col_info, col_del = st.columns([3, 1])
                 with col_info:
-                    st.text(f"NEW{i+1}: ({region['x']}, {region['y']}) {region['width']}x{region['height']}")
+                    st.text(f"{i+1}. ({region['x']}, {region['y']}) {region['width']}x{region['height']}")
                 with col_del:
                     if st.button("🗑️", key=f"del_pending_{i}"):
                         st.session_state.pending_regions.pop(i)
@@ -249,19 +382,21 @@ def render_step2_detect():
                 st.session_state.pending_regions = []
                 st.rerun()
         
-        # 기존 확정 영역 목록
+        # ========== 기존 확정 영역 목록 ==========
         if st.session_state.text_regions:
-            st.divider()
+            st.markdown("---")
             st.markdown(f"**🟢 확정된 영역: {len(st.session_state.text_regions)}개**")
             
             for i, region in enumerate(st.session_state.text_regions):
                 bounds = region['bounds']
-                text_preview = region['text'][:15] + "..." if len(region['text']) > 15 else region['text']
+                text_preview = region['text'][:12] + "..." if len(region['text']) > 12 else region['text']
+                if not text_preview.strip():
+                    text_preview = "(빈 텍스트)"
                 st.text(f"{i+1}. ({bounds['x']}, {bounds['y']}) - {text_preview}")
     
     st.divider()
     
-    # 하단 버튼
+    # ========== 하단 버튼 ==========
     col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
     
     with col_btn1:
@@ -347,7 +482,7 @@ def render_step3_edit():
             with st.expander(f"**{i+1}.** {display_text}", expanded=(i < 3)):
                 # 영역 좌표 표시
                 bounds = region['bounds']
-                st.caption(f"📍 위치: ({bounds['x']}, {bounds['y']}) 크기: {bounds['width']}x{bounds['height']}")
+                st.caption(f"📍 위치: ({bounds['x']}, {bounds['y']}) → ({bounds['x']+bounds['width']}, {bounds['y']+bounds['height']}) | 크기: {bounds['width']}x{bounds['height']}")
                 
                 # OCR 결과 표시
                 if region.get('confidence', 0) > 0:
@@ -586,7 +721,7 @@ def render_sidebar():
     """사이드바 렌더링"""
     with st.sidebar:
         st.title("🖼️ 한글 인포그래픽 교정 도구")
-        st.caption("v2.2 - 좌표 입력 방식")
+        st.caption("v2.3 - 좌표 자동 계산")
         
         st.divider()
         
@@ -617,19 +752,21 @@ def render_sidebar():
         # 도움말
         with st.expander("❓ 도움말"):
             st.markdown("""
-            **사용 방법:**
-            1. PNG/JPG 이미지 업로드
-            2. 수정할 영역의 좌표 입력
-            3. OCR 결과 확인 후 텍스트 수정
-            4. 결과물 다운로드
+            **좌표 입력 방법:**
+            
+            **방법 1: 시작점 + 끝점**
+            1. X1, Y1 (좌측상단) 입력
+            2. X2, Y2 (우측하단) 입력
+            3. "W, H 계산" 클릭
+            
+            **방법 2: 시작점 + 크기**
+            1. X1, Y1 (좌측상단) 입력
+            2. W, H (너비, 높이) 입력
+            3. "X2, Y2 계산" 클릭
             
             **좌표 확인:**
             - 그림판에서 이미지 열기
             - 마우스 위치의 좌표 확인
-            - 또는 이미지 편집 도구 사용
-            
-            **폰트 추가:**
-            `fonts/` 폴더에 .ttf 파일 추가
             """)
 
 # ==============================================================================
