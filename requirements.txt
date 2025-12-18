@@ -2,10 +2,10 @@
 # Streamlit Cloud Compatible
 
 # Web Framework
-streamlit>=1.28.0
+streamlit==1.28.0
 
 # Canvas for region selection
-streamlit-drawable-canvas>=0.9.3
+streamlit-drawable-canvas==0.9.3
 
 # Image Processing
 opencv-python-headless>=4.8.0
