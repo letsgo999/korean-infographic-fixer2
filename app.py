@@ -1,6 +1,6 @@
 """
 Korean Infographic Fixer - Streamlit Main App
-v2.5 - 스마트 자동 계산 (6개 입력창 모두 수정 가능)
+v2.5 - 스마트 자동 계산 (수정)
 """
 import streamlit as st
 import cv2
@@ -32,19 +32,27 @@ def init_session_state():
         'text_regions': [],
         'edited_texts': {},
         'pending_regions': [],
-        # 좌표 입력값 (6개 모두)
-        'coord_x1': 0,
-        'coord_y1': 0,
-        'coord_x2': 0,
-        'coord_y2': 0,
-        'coord_w': 0,
-        'coord_h': 0,
-        # 마지막 변경 그룹 ('start', 'end', 'size')
-        'last_changed': None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+
+def init_coord_state(w_img, h_img):
+    """좌표 상태 초기화 (이미지 로드 후)"""
+    if 'coord_x1' not in st.session_state:
+        st.session_state.coord_x1 = 0
+    if 'coord_y1' not in st.session_state:
+        st.session_state.coord_y1 = 0
+    if 'coord_x2' not in st.session_state:
+        st.session_state.coord_x2 = 0
+    if 'coord_y2' not in st.session_state:
+        st.session_state.coord_y2 = 0
+    if 'coord_w' not in st.session_state:
+        st.session_state.coord_w = 0
+    if 'coord_h' not in st.session_state:
+        st.session_state.coord_h = 0
+    if 'last_changed' not in st.session_state:
+        st.session_state.last_changed = None
 
 # ==============================================================================
 # 자동 계산 콜백
@@ -52,55 +60,59 @@ def init_session_state():
 def on_start_change():
     """시작점(X1, Y1) 변경 시"""
     st.session_state.last_changed = 'start'
-    auto_calculate()
+    x1 = st.session_state.coord_x1
+    y1 = st.session_state.coord_y1
+    x2 = st.session_state.coord_x2
+    y2 = st.session_state.coord_y2
+    w = st.session_state.coord_w
+    h = st.session_state.coord_h
+    
+    # 끝점이 있으면 크기 계산
+    if x2 > x1 and y2 > y1:
+        st.session_state.coord_w = x2 - x1
+        st.session_state.coord_h = y2 - y1
+    # 크기가 있으면 끝점 계산
+    elif w > 0 and h > 0:
+        st.session_state.coord_x2 = x1 + w
+        st.session_state.coord_y2 = y1 + h
 
 def on_end_change():
     """끝점(X2, Y2) 변경 시"""
     st.session_state.last_changed = 'end'
-    auto_calculate()
+    x1 = st.session_state.coord_x1
+    y1 = st.session_state.coord_y1
+    x2 = st.session_state.coord_x2
+    y2 = st.session_state.coord_y2
+    w = st.session_state.coord_w
+    h = st.session_state.coord_h
+    
+    # 시작점이 있으면 크기 계산
+    if x2 > x1 and y2 > y1:
+        st.session_state.coord_w = x2 - x1
+        st.session_state.coord_h = y2 - y1
+    # 크기가 있으면 시작점 계산
+    elif w > 0 and h > 0:
+        st.session_state.coord_x1 = max(0, x2 - w)
+        st.session_state.coord_y1 = max(0, y2 - h)
 
 def on_size_change():
     """크기(W, H) 변경 시"""
     st.session_state.last_changed = 'size'
-    auto_calculate()
-
-def auto_calculate():
-    """마지막 변경된 그룹 기준으로 나머지 값 자동 계산"""
-    last = st.session_state.get('last_changed', None)
+    x1 = st.session_state.coord_x1
+    y1 = st.session_state.coord_y1
+    x2 = st.session_state.coord_x2
+    y2 = st.session_state.coord_y2
+    w = st.session_state.coord_w
+    h = st.session_state.coord_h
     
-    x1 = st.session_state.get('coord_x1', 0)
-    y1 = st.session_state.get('coord_y1', 0)
-    x2 = st.session_state.get('coord_x2', 0)
-    y2 = st.session_state.get('coord_y2', 0)
-    w = st.session_state.get('coord_w', 0)
-    h = st.session_state.get('coord_h', 0)
-    
-    if last == 'start':
-        # 시작점 변경됨 → 끝점 있으면 크기 계산, 크기 있으면 끝점 계산
-        if x2 > 0 and y2 > 0 and x2 > x1 and y2 > y1:
-            st.session_state.coord_w = x2 - x1
-            st.session_state.coord_h = y2 - y1
-        elif w > 0 and h > 0:
-            st.session_state.coord_x2 = x1 + w
-            st.session_state.coord_y2 = y1 + h
-    
-    elif last == 'end':
-        # 끝점 변경됨 → 시작점 있으면 크기 계산, 크기 있으면 시작점 계산
-        if x1 >= 0 and y1 >= 0 and x2 > x1 and y2 > y1:
-            st.session_state.coord_w = x2 - x1
-            st.session_state.coord_h = y2 - y1
-        elif w > 0 and h > 0:
-            st.session_state.coord_x1 = max(0, x2 - w)
-            st.session_state.coord_y1 = max(0, y2 - h)
-    
-    elif last == 'size':
-        # 크기 변경됨 → 시작점 있으면 끝점 계산, 끝점 있으면 시작점 계산
-        if x1 >= 0 and y1 >= 0 and (x1 > 0 or y1 > 0):
-            st.session_state.coord_x2 = x1 + w
-            st.session_state.coord_y2 = y1 + h
-        elif x2 > 0 and y2 > 0:
-            st.session_state.coord_x1 = max(0, x2 - w)
-            st.session_state.coord_y1 = max(0, y2 - h)
+    # 시작점이 있으면 끝점 계산
+    if x1 > 0 or y1 > 0:
+        st.session_state.coord_x2 = x1 + w
+        st.session_state.coord_y2 = y1 + h
+    # 끝점이 있으면 시작점 계산
+    elif x2 > 0 and y2 > 0:
+        st.session_state.coord_x1 = max(0, x2 - w)
+        st.session_state.coord_y1 = max(0, y2 - h)
 
 def reset_coords():
     """좌표 입력 초기화"""
@@ -156,7 +168,11 @@ def render_step1_upload():
         st.session_state.text_regions = []
         st.session_state.edited_texts = {}
         st.session_state.pending_regions = []
-        reset_coords()
+        
+        # 좌표 관련 세션 상태 삭제 (새 이미지 업로드 시 초기화)
+        for k in ['coord_x1', 'coord_y1', 'coord_x2', 'coord_y2', 'coord_w', 'coord_h', 'last_changed']:
+            if k in st.session_state:
+                del st.session_state[k]
         
         col1, col2 = st.columns([2, 1])
         with col1:
@@ -185,6 +201,9 @@ def render_step2_detect():
     image = st.session_state.original_image
     h_img, w_img = image.shape[:2]
     
+    # 좌표 상태 초기화
+    init_coord_state(w_img, h_img)
+    
     col_img, col_form = st.columns([2, 1])
     
     with col_img:
@@ -196,9 +215,9 @@ def render_step2_detect():
         
         st.info("""
         💡 **입력 방법** (아무 조합이나 가능!)
-        - **시작점 + 끝점** 입력 → 크기 자동 계산
-        - **시작점 + 크기** 입력 → 끝점 자동 계산  
-        - **끝점 + 크기** 입력 → 시작점 자동 계산
+        - **시작점 + 끝점** → 크기 자동 계산
+        - **시작점 + 크기** → 끝점 자동 계산  
+        - **끝점 + 크기** → 시작점 자동 계산
         """)
     
     with col_form:
@@ -208,36 +227,30 @@ def render_step2_detect():
         st.markdown("🔹 **좌측 상단 (시작점)**")
         c1, c2 = st.columns(2)
         with c1:
-            st.number_input("X1", min_value=0, max_value=w_img-1, 
-                           value=st.session_state.coord_x1, step=1,
+            st.number_input("X1", min_value=0, max_value=w_img-1, step=1,
                            key="coord_x1", on_change=on_start_change)
         with c2:
-            st.number_input("Y1", min_value=0, max_value=h_img-1,
-                           value=st.session_state.coord_y1, step=1,
+            st.number_input("Y1", min_value=0, max_value=h_img-1, step=1,
                            key="coord_y1", on_change=on_start_change)
         
         # ========== 우측 하단 (끝점) ==========
         st.markdown("🔹 **우측 하단 (끝점)**")
         c3, c4 = st.columns(2)
         with c3:
-            st.number_input("X2", min_value=0, max_value=w_img,
-                           value=st.session_state.coord_x2, step=1,
+            st.number_input("X2", min_value=0, max_value=w_img, step=1,
                            key="coord_x2", on_change=on_end_change)
         with c4:
-            st.number_input("Y2", min_value=0, max_value=h_img,
-                           value=st.session_state.coord_y2, step=1,
+            st.number_input("Y2", min_value=0, max_value=h_img, step=1,
                            key="coord_y2", on_change=on_end_change)
         
         # ========== 크기 (너비/높이) ==========
         st.markdown("🔹 **크기 (너비/높이)**")
         c5, c6 = st.columns(2)
         with c5:
-            st.number_input("너비 (W)", min_value=0, max_value=w_img,
-                           value=st.session_state.coord_w, step=1,
+            st.number_input("너비 (W)", min_value=0, max_value=w_img, step=1,
                            key="coord_w", on_change=on_size_change)
         with c6:
-            st.number_input("높이 (H)", min_value=0, max_value=h_img,
-                           value=st.session_state.coord_h, step=1,
+            st.number_input("높이 (H)", min_value=0, max_value=h_img, step=1,
                            key="coord_h", on_change=on_size_change)
         
         st.markdown("---")
@@ -488,7 +501,7 @@ def render_step4_export():
 def render_sidebar():
     with st.sidebar:
         st.title("🖼️ 한글 인포그래픽 교정")
-        st.caption("v2.5 - 스마트 자동계산")
+        st.caption("v2.5")
         st.divider()
         
         steps = ["1.업로드", "2.영역선택", "3.편집", "4.내보내기"]
