@@ -1,22 +1,7 @@
-# Korean Infographic Fixer v2.0
-# Streamlit Cloud Compatible
-
-# Web Framework
-streamlit==1.28.0
-
-# Canvas for region selection
-streamlit-drawable-canvas==0.9.3
-
-# Image Processing
+streamlit>=1.28.0
 opencv-python-headless>=4.8.0
 numpy>=1.24.0
 pillow>=10.0.0
-
-# OCR
 pytesseract>=0.3.10
-
-# PDF Export (optional)
 reportlab>=4.0.0
-
-# Utilities
 python-dotenv>=1.0.0
