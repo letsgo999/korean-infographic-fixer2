@@ -1,6 +1,6 @@
 """
 Korean Infographic Fixer - Streamlit Main App
-v2.1 - Streamlit 1.28.0 호환 버전
+v2.2 - 캔버스 없이 좌표 입력 방식 (호환성 최대화)
 """
 import streamlit as st
 import cv2
@@ -10,9 +10,6 @@ import io
 import os
 import uuid
 from datetime import datetime
-
-# Canvas 라이브러리 (Streamlit 1.28.0에서는 패치 불필요)
-from streamlit_drawable_canvas import st_canvas
 
 # Modules
 from modules import (
@@ -43,8 +40,7 @@ def init_session_state():
         'uploaded_filename': None,
         'text_regions': [],
         'edited_texts': {},
-        'canvas_key': "canvas_v1",
-        'scroll_y': 0
+        'pending_regions': [],  # 추가 대기 중인 영역들
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -53,40 +49,40 @@ def init_session_state():
 # ==============================================================================
 # 유틸리티 함수
 # ==============================================================================
-def draw_regions_on_image(image, regions, edited_texts):
+def draw_regions_on_image(image, regions, edited_texts=None, pending_regions=None):
     """텍스트 영역을 이미지에 표시"""
     vis_image = image.copy()
+    edited_texts = edited_texts or {}
+    pending_regions = pending_regions or []
     
-    for region in regions:
+    # 기존 확정된 영역 (녹색)
+    for i, region in enumerate(regions):
         if isinstance(region, dict):
-            r_id = region['id']
             bounds = region['bounds']
             text = region['text']
-            is_inverted = region.get('is_inverted', False)
         else:
-            r_id = region.id
             bounds = region.bounds
             text = region.text
-            is_inverted = region.is_inverted
         
         x, y, w, h = bounds['x'], bounds['y'], bounds['width'], bounds['height']
+        color = (0, 255, 0)  # 녹색
+        cv2.rectangle(vis_image, (x, y), (x + w, y + h), color, 2)
         
-        # 색상 결정
-        if r_id in edited_texts and edited_texts[r_id] != text:
-            color = (255, 0, 255)  # 마젠타: 수정됨
-            thickness = 3
-        elif is_inverted:
-            color = (255, 100, 0)  # 주황: 역상
-            thickness = 2
-        else:
-            color = (0, 255, 0)    # 녹색: 일반
-            thickness = 2
+        # 번호 표시
+        label = f"{i+1}"
+        cv2.putText(vis_image, label, (x+5, y+20), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    
+    # 대기 중인 영역 (빨간색)
+    for i, region in enumerate(pending_regions):
+        x, y, w, h = region['x'], region['y'], region['width'], region['height']
+        color = (0, 0, 255)  # 빨간색 (BGR)
+        cv2.rectangle(vis_image, (x, y), (x + w, y + h), color, 2)
         
-        cv2.rectangle(vis_image, (x, y), (x + w, y + h), color, thickness)
-        
-        # 영역 번호 표시
-        cv2.putText(vis_image, r_id.split('_')[-1], (x+2, y+15), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+        # 번호 표시
+        label = f"NEW{i+1}"
+        cv2.putText(vis_image, label, (x+5, y+20), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
     
     return vis_image
 
@@ -114,7 +110,7 @@ def render_step1_upload():
     st.info("""
     **사용 방법:**
     1. 교정할 인포그래픽 이미지를 업로드합니다.
-    2. 다음 단계에서 마우스로 수정할 텍스트 영역을 드래그하여 선택합니다.
+    2. 다음 단계에서 수정할 텍스트 영역의 좌표를 입력합니다.
     3. 선택한 영역의 텍스트를 수정하고 폰트/크기/색상을 조정합니다.
     4. 최종 결과물을 다운로드합니다.
     """)
@@ -134,9 +130,9 @@ def render_step1_upload():
         # 세션에 저장
         st.session_state.original_image = image
         st.session_state.uploaded_filename = uploaded_file.name
-        st.session_state.scroll_y = 0
         st.session_state.text_regions = []
         st.session_state.edited_texts = {}
+        st.session_state.pending_regions = []
         
         # 이미지 표시
         col1, col2 = st.columns([2, 1])
@@ -156,14 +152,13 @@ def render_step1_upload():
         
         if st.button("🎯 텍스트 영역 선택하기 →", type="primary"):
             st.session_state.current_step = 2
-            st.session_state.canvas_key = f"canvas_{uuid.uuid4().hex[:8]}"
             st.rerun()
 
 # ==============================================================================
-# Step 2: 텍스트 영역 선택 (캔버스)
+# Step 2: 텍스트 영역 선택 (좌표 입력 방식)
 # ==============================================================================
 def render_step2_detect():
-    """Step 2: 캔버스에서 텍스트 영역 드래그 선택"""
+    """Step 2: 좌표 입력으로 텍스트 영역 선택"""
     st.header("🎯 Step 2: 텍스트 영역 선택")
     
     if st.session_state.original_image is None:
@@ -176,142 +171,143 @@ def render_step2_detect():
     original_image = st.session_state.original_image
     h_orig, w_orig = original_image.shape[:2]
     
-    # 캔버스 설정
-    CANVAS_WIDTH = 700
-    VIEWPORT_HEIGHT = 800
+    # 레이아웃: 좌측 이미지, 우측 입력폼
+    col_img, col_form = st.columns([2, 1])
     
-    # 스케일 계산
-    if w_orig > CANVAS_WIDTH:
-        scale_factor = w_orig / CANVAS_WIDTH
-    else:
-        scale_factor = 1.0
-        CANVAS_WIDTH = w_orig
-
-    # 스크롤 (이미지가 길 경우)
-    current_scroll = st.session_state.scroll_y
-    if h_orig > VIEWPORT_HEIGHT:
-        st.info("💡 이미지가 세로로 길어서 부분적으로 표시됩니다. 슬라이더로 작업 위치를 이동하세요.")
-        max_scroll = h_orig - VIEWPORT_HEIGHT
-        current_scroll = st.slider(
-            "↕️ 작업 위치 이동",
-            0, max_scroll,
-            st.session_state.scroll_y,
-            step=50,
-            help="이미지의 다른 부분을 작업하려면 슬라이더를 움직이세요"
+    with col_img:
+        st.subheader("📍 원본 이미지")
+        st.caption(f"이미지 크기: {w_orig} x {h_orig} px")
+        
+        # 영역이 표시된 이미지
+        visualized = draw_regions_on_image(
+            original_image, 
+            st.session_state.text_regions,
+            pending_regions=st.session_state.pending_regions
         )
-        st.session_state.scroll_y = current_scroll
+        st.image(
+            cv2.cvtColor(visualized, cv2.COLOR_BGR2RGB),
+            caption="🟢 확정된 영역 | 🔴 추가 대기 영역",
+            use_column_width=True
+        )
+        
+        st.info("""
+        💡 **좌표 확인 방법:**
+        1. 이미지를 다운로드하거나 그림판에서 열기
+        2. 수정할 텍스트 영역의 좌측 상단 좌표(X, Y)와 크기(W, H) 확인
+        3. 우측 폼에 좌표 입력 후 "영역 추가" 클릭
+        """)
     
-    # 현재 보이는 영역 자르기
-    crop_h = min(VIEWPORT_HEIGHT, h_orig - current_scroll)
-    crop_img = original_image[current_scroll:current_scroll + crop_h, :]
+    with col_form:
+        st.subheader("➕ 영역 추가")
+        
+        # 좌표 입력 폼
+        with st.form("add_region_form"):
+            st.markdown("**새 영역 좌표 입력:**")
+            
+            col_x, col_y = st.columns(2)
+            with col_x:
+                x = st.number_input("X (좌측)", min_value=0, max_value=w_orig-1, value=0, step=10)
+            with col_y:
+                y = st.number_input("Y (상단)", min_value=0, max_value=h_orig-1, value=0, step=10)
+            
+            col_w, col_h = st.columns(2)
+            with col_w:
+                w = st.number_input("너비 (W)", min_value=10, max_value=w_orig, value=200, step=10)
+            with col_h:
+                h = st.number_input("높이 (H)", min_value=10, max_value=h_orig, value=50, step=10)
+            
+            submitted = st.form_submit_button("➕ 영역 추가", use_container_width=True)
+            
+            if submitted:
+                # 경계 검사
+                x = max(0, min(x, w_orig - 10))
+                y = max(0, min(y, h_orig - 10))
+                w = min(w, w_orig - x)
+                h = min(h, h_orig - y)
+                
+                new_region = {'x': x, 'y': y, 'width': w, 'height': h}
+                st.session_state.pending_regions.append(new_region)
+                st.success(f"✅ 영역 추가됨: ({x}, {y}) - {w}x{h}")
+                st.rerun()
+        
+        st.divider()
+        
+        # 대기 중인 영역 목록
+        if st.session_state.pending_regions:
+            st.markdown(f"**🔴 추가 대기 영역: {len(st.session_state.pending_regions)}개**")
+            
+            for i, region in enumerate(st.session_state.pending_regions):
+                col_info, col_del = st.columns([3, 1])
+                with col_info:
+                    st.text(f"NEW{i+1}: ({region['x']}, {region['y']}) {region['width']}x{region['height']}")
+                with col_del:
+                    if st.button("🗑️", key=f"del_pending_{i}"):
+                        st.session_state.pending_regions.pop(i)
+                        st.rerun()
+            
+            if st.button("🗑️ 전체 삭제", use_container_width=True):
+                st.session_state.pending_regions = []
+                st.rerun()
+        
+        # 기존 확정 영역 목록
+        if st.session_state.text_regions:
+            st.divider()
+            st.markdown(f"**🟢 확정된 영역: {len(st.session_state.text_regions)}개**")
+            
+            for i, region in enumerate(st.session_state.text_regions):
+                bounds = region['bounds']
+                text_preview = region['text'][:15] + "..." if len(region['text']) > 15 else region['text']
+                st.text(f"{i+1}. ({bounds['x']}, {bounds['y']}) - {text_preview}")
     
-    # 리사이징
-    h_crop, w_crop = crop_img.shape[:2]
-    disp_w = int(w_crop / scale_factor)
-    disp_h = int(h_crop / scale_factor)
-    display_img = cv2.resize(crop_img, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
-
-    # RGB 변환 및 PIL 이미지
-    img_rgb = cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB)
-    pil_image = Image.fromarray(img_rgb)
-
-    # UI
-    st.caption(f"📍 현재 작업 위치: Y={current_scroll}px ~ {current_scroll + crop_h}px (전체 높이: {h_orig}px)")
+    st.divider()
     
-    col_btn1, col_btn2, _ = st.columns([1, 1, 3])
+    # 하단 버튼
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 1])
+    
     with col_btn1:
-        if st.button("🔄 캔버스 초기화"):
-            st.session_state.canvas_key = f"canvas_{uuid.uuid4().hex[:8]}"
-            st.rerun()
-    with col_btn2:
         if st.button("← 이전 단계"):
             st.session_state.current_step = 1
             st.rerun()
-
-    st.markdown("**🖱️ 마우스로 드래그하여 수정할 텍스트 영역을 선택하세요:**")
     
-    # 캔버스
-    try:
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 0, 0, 0.15)",
-            stroke_width=2,
-            stroke_color="#FF0000",
-            background_image=pil_image,
-            update_streamlit=True,
-            height=disp_h,
-            width=disp_w,
-            drawing_mode="rect",
-            key=st.session_state.canvas_key,
-            display_toolbar=True
-        )
-    except Exception as e:
-        st.error(f"❌ 캔버스 로드 실패: {e}")
-        st.info("페이지를 새로고침하거나 다시 시도해주세요.")
-        return
-
-    # 선택된 영역 처리
-    if canvas_result.json_data is not None:
-        objects = canvas_result.json_data.get("objects", [])
-        
-        if len(objects) > 0:
-            st.success(f"✅ 선택된 영역: **{len(objects)}개**")
-            
-            # 미리보기 테이블
-            with st.expander("📋 선택된 영역 목록 보기", expanded=False):
-                for i, obj in enumerate(objects):
-                    x_real = int(obj["left"] * scale_factor)
-                    y_real = int(obj["top"] * scale_factor + current_scroll)
-                    w_real = int(obj["width"] * scale_factor)
-                    h_real = int(obj["height"] * scale_factor)
-                    st.text(f"영역 {i+1}: X={x_real}, Y={y_real}, W={w_real}, H={h_real}")
-            
-            if st.button("📝 텍스트 추출 및 편집하기 →", type="primary"):
+    with col_btn2:
+        # 텍스트 추출 버튼
+        total_regions = len(st.session_state.pending_regions)
+        if total_regions > 0:
+            if st.button(f"📝 {total_regions}개 영역 텍스트 추출 →", type="primary"):
                 with st.spinner("🔄 텍스트 추출 중..."):
                     regions = []
                     
-                    for i, obj in enumerate(objects):
-                        # 좌표 변환 (캔버스 -> 원본 이미지)
-                        x_view = obj["left"] * scale_factor
-                        y_view = obj["top"] * scale_factor
-                        w_view = obj["width"] * scale_factor
-                        h_view = obj["height"] * scale_factor
-                        
-                        x_real = int(x_view)
-                        y_real = int(y_view + current_scroll)
-                        w_real = int(w_view)
-                        h_real = int(h_view)
-                        
-                        # 경계 검사
-                        x_real = max(0, min(x_real, w_orig - 1))
-                        y_real = max(0, min(y_real, h_orig - 1))
-                        w_real = max(10, min(w_real, w_orig - x_real))
-                        h_real = max(10, min(h_real, h_orig - y_real))
-                        
-                        if w_real < 5 or h_real < 5:
-                            continue
-                        
+                    for i, pending in enumerate(st.session_state.pending_regions):
                         # OCR로 텍스트 추출
                         region = extract_text_from_crop(
-                            original_image, 
-                            x_real, y_real, 
-                            w_real, h_real
+                            original_image,
+                            pending['x'],
+                            pending['y'],
+                            pending['width'],
+                            pending['height']
                         )
                         
-                        region.id = f"region_{i:03d}"
-                        region.suggested_font_size = max(12, min(int(h_real * 0.7), 72))
+                        region.id = f"region_{len(st.session_state.text_regions) + i:03d}"
+                        region.suggested_font_size = max(12, min(int(pending['height'] * 0.7), 72))
                         region.width_scale = 100
                         region.font_filename = "NotoSansKR-Regular.ttf"
                         
                         regions.append(region.to_dict())
                     
-                    if regions:
-                        st.session_state.text_regions = regions
-                        st.session_state.current_step = 3
-                        st.rerun()
-                    else:
-                        st.error("선택된 영역이 너무 작습니다. 더 크게 선택해주세요.")
+                    # 기존 영역에 추가
+                    st.session_state.text_regions.extend(regions)
+                    st.session_state.pending_regions = []
+                    st.session_state.current_step = 3
+                    st.rerun()
         else:
-            st.info("👆 마우스로 드래그하여 텍스트 영역을 선택하세요.")
+            st.button("📝 영역을 먼저 추가하세요", disabled=True)
+    
+    with col_btn3:
+        # 기존 영역이 있으면 바로 편집으로 이동 가능
+        if st.session_state.text_regions:
+            if st.button("✏️ 기존 영역 편집하기 →"):
+                st.session_state.current_step = 3
+                st.rerun()
 
 # ==============================================================================
 # Step 3: 텍스트 편집
@@ -349,9 +345,13 @@ def render_step3_edit():
                 display_text = "(텍스트 없음)"
             
             with st.expander(f"**{i+1}.** {display_text}", expanded=(i < 3)):
+                # 영역 좌표 표시
+                bounds = region['bounds']
+                st.caption(f"📍 위치: ({bounds['x']}, {bounds['y']}) 크기: {bounds['width']}x{bounds['height']}")
+                
                 # OCR 결과 표시
                 if region.get('confidence', 0) > 0:
-                    st.caption(f"🔍 OCR 인식 결과 (신뢰도: {region.get('confidence', 0):.0f}%)")
+                    st.caption(f"🔍 OCR 신뢰도: {region.get('confidence', 0):.0f}%")
                 
                 # 텍스트 입력
                 current_text = st.session_state.edited_texts.get(region_id, original_text)
@@ -408,21 +408,30 @@ def render_step3_edit():
                     )
                 
                 # 적용 버튼
-                if st.button("💾 저장", key=f"save_{region_id}"):
-                    st.session_state.edited_texts[region_id] = edited_text
-                    
-                    # 영역 정보 업데이트
-                    for r in st.session_state.text_regions:
-                        if r['id'] == region_id:
-                            r['text'] = edited_text
-                            r['suggested_font_size'] = font_size
-                            r['width_scale'] = width_scale
-                            r['text_color'] = text_color
-                            r['font_filename'] = selected_font
-                            break
-                    
-                    st.success("✅ 저장됨!")
-                    st.rerun()
+                col_save, col_delete = st.columns([2, 1])
+                with col_save:
+                    if st.button("💾 저장", key=f"save_{region_id}"):
+                        st.session_state.edited_texts[region_id] = edited_text
+                        
+                        # 영역 정보 업데이트
+                        for r in st.session_state.text_regions:
+                            if r['id'] == region_id:
+                                r['text'] = edited_text
+                                r['suggested_font_size'] = font_size
+                                r['width_scale'] = width_scale
+                                r['text_color'] = text_color
+                                r['font_filename'] = selected_font
+                                break
+                        
+                        st.success("✅ 저장됨!")
+                        st.rerun()
+                
+                with col_delete:
+                    if st.button("🗑️ 삭제", key=f"delete_{region_id}"):
+                        st.session_state.text_regions = [r for r in st.session_state.text_regions if r['id'] != region_id]
+                        if region_id in st.session_state.edited_texts:
+                            del st.session_state.edited_texts[region_id]
+                        st.rerun()
     
     # 우측: 미리보기
     with col2:
@@ -431,25 +440,20 @@ def render_step3_edit():
         visualized = draw_regions_on_image(image, regions, st.session_state.edited_texts)
         st.image(
             cv2.cvtColor(visualized, cv2.COLOR_BGR2RGB),
-            caption="🟢 일반 | 🟣 수정됨",
+            caption="🟢 텍스트 영역 표시",
             use_column_width=True
         )
         
         # 범례
-        st.caption("""
-        **색상 범례:**
-        - 🟢 녹색: 원본 상태
-        - 🟣 마젠타: 텍스트 수정됨
-        """)
+        st.caption("녹색 박스: 텍스트 영역")
     
     st.divider()
     
     # 네비게이션
     col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 1])
     with col_nav1:
-        if st.button("← 영역 다시 선택"):
+        if st.button("← 영역 추가하기"):
             st.session_state.current_step = 2
-            st.session_state.canvas_key = f"canvas_{uuid.uuid4().hex[:8]}"
             st.rerun()
     with col_nav3:
         if st.button("📤 결과물 생성하기 →", type="primary"):
@@ -572,6 +576,7 @@ def render_step4_export():
             st.session_state.original_image = None
             st.session_state.text_regions = []
             st.session_state.edited_texts = {}
+            st.session_state.pending_regions = []
             st.rerun()
 
 # ==============================================================================
@@ -581,7 +586,7 @@ def render_sidebar():
     """사이드바 렌더링"""
     with st.sidebar:
         st.title("🖼️ 한글 인포그래픽 교정 도구")
-        st.caption("v2.1 - Streamlit 1.28 호환")
+        st.caption("v2.2 - 좌표 입력 방식")
         
         st.divider()
         
@@ -603,7 +608,8 @@ def render_sidebar():
         # 현재 상태
         if st.session_state.original_image is not None:
             st.subheader("📊 현재 상태")
-            st.metric("텍스트 영역", len(st.session_state.text_regions))
+            st.metric("확정 영역", len(st.session_state.text_regions))
+            st.metric("대기 영역", len(st.session_state.pending_regions))
             st.metric("수정된 영역", len(st.session_state.edited_texts))
         
         st.divider()
@@ -613,9 +619,14 @@ def render_sidebar():
             st.markdown("""
             **사용 방법:**
             1. PNG/JPG 이미지 업로드
-            2. 캔버스에서 수정할 영역 드래그
+            2. 수정할 영역의 좌표 입력
             3. OCR 결과 확인 후 텍스트 수정
             4. 결과물 다운로드
+            
+            **좌표 확인:**
+            - 그림판에서 이미지 열기
+            - 마우스 위치의 좌표 확인
+            - 또는 이미지 편집 도구 사용
             
             **폰트 추가:**
             `fonts/` 폴더에 .ttf 파일 추가
